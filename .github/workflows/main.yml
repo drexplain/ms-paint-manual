@@ -1,0 +1,55 @@
+name: AI Improve Documentation
+
+on:
+  push:
+    paths: ['docs/*.md']
+  workflow_dispatch:  # кнопка для ручного запуска
+
+jobs:
+  improve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Call DeepSeek via GitHub Models
+        id: ai
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Читаем исходный файл
+          DOC=$(cat docs/paint-manual.md | jq -Rs .)
+          
+          # Формируем промпт (сокращённая версия для теста)
+          PROMPT="Ты — редактор технической документации. Исправь следующий текст: убери субъективные оценки ('весьма удобно', 'к сожалению'), замени 'вы можете' на прямые команды, разбей длинные предложения. Добавь разделы 'Цель', 'Предусловия', 'Возможные ошибки', если их нет. Выдай только исправленный текст, без пояснений."
+          
+          # Вызываем API GitHub Models
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://models.inference.ai.azure.com/chat/completions \
+            -d "{
+              \"model\": \"DeepSeek-R1\",
+              \"messages\": [
+                {\"role\": \"system\", \"content\": \"$PROMPT\"},
+                {\"role\": \"user\", \"content\": $DOC}
+              ],
+              \"temperature\": 0.3,
+              \"max_tokens\": 4000
+            }")
+          
+          # Извлекаем ответ
+          echo "$RESPONSE" | jq -r '.choices[0].message.content' > docs/paint-manual-improved.md
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "AI: улучшение документации Paint"
+          title: "Предложение от AI-агента"
+          branch: "ai-patch"
+          base: "main"
+          body: "Автоматическое исправление стиля, терминов и структуры."
+          add-paths: docs/paint-manual-improved.md
