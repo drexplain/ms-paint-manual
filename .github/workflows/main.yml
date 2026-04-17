@@ -3,7 +3,7 @@ name: AI Improve Documentation
 on:
   push:
     paths: ['docs/*.md']
-  workflow_dispatch:  # кнопка для ручного запуска
+  workflow_dispatch:
 
 jobs:
   improve:
@@ -14,73 +14,47 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Устанавливаем библиотеку для работы с API
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Call DeepSeek via GitHub Models
+      - name: Call DeepSeek via Curl
         id: ai
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: python
         run: |
-          import os
-          import requests
-          import json
+          # 1. Читаем файл и подготавливаем его для JSON (экранируем кавычки и переносы)
+          TEXT_CONTENT=$(cat docs/paint-manual.md | jq -aRs .)
 
-          # 1. Читаем исходный файл
-          file_path = 'docs/paint-manual.md'
-          try:
-              with open(file_path, 'r', encoding='utf-8') as f:
-                  doc_content = f.read()
-          except Exception as e:
-              print(f"Ошибка чтения файла: {e}")
-              exit(1)
-
-          # 2. Настройки запроса
-          url = "https://models.inference.ai.azure.com/chat/completions"
-          headers = {
-              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
-              "Content-Type": "application/json"
-          }
-          
-          prompt = (
-              "Ты — опытный технический редактор. Твоя задача: исправить стиль документации. "
-              "Убери субъективные оценки, используй повелительное наклонение. "
-              "Добавь разделы 'Цель', 'Предусловия', 'Возможные ошибки', если их нет. "
-              "Выдай только чистый исправленный текст в формате Markdown."
-          )
-
-          payload = {
-              "model": "DeepSeek-R1",
-              "messages": [
-                  {"role": "system", "content": prompt},
-                  {"role": "user", "content": doc_content}
+          # 2. Делаем запрос через curl с выводом ответа в файл
+          curl -v -X POST "https://models.inference.ai.azure.com/chat/completions" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"DeepSeek-R1\",
+              \"messages\": [
+                {\"role\": \"system\", \"content\": \"Ты — технический редактор. Исправь стиль текста, убери лишние слова, добавь разделы Цель и Предусловия. Выдай только исправленный Markdown.\"},
+                {\"role\": \"user\", \"content\": $TEXT_CONTENT}
               ],
-              "temperature": 0.3
-          }
+              \"temperature\": 0.3
+            }" > response.json
 
-          # 3. Отправляем запрос
-          print("Отправка запроса в GitHub Models (DeepSeek-R1)...")
-          response = requests.post(url, headers=headers, json=payload)
-          
-          # 4. Диагностика и обработка результата
-          if response.status_code == 200:
-              data = response.json()
-              
-              # Печатаем ответ в логи, чтобы мы могли его изучить, если снова будет null
-              print("ПОЛНЫЙ ОТВЕТ ОТ API:")
-              print(json.dumps(data, indent=2))
-              
-              # Пытаемся достать текст из разных полей (зависит от настроек модели)
-              result = None
-              if 'choices' in data and len(data['choices']) > 0:
-                  choice = data['choices'][0]
-                  if 'message' in choice:
-                      # Сначала ищем в content, затем в reasoning_content (для R1)
-                      result = choice['message'].get('content') or choice['message'].get('reasoning_content')
-              
-              if result is None:
-                  result = f"ВНИМАНИЕ: API вернул пустой ответ (null). Полный ответ был: {json.dumps(data)}"
-              
-              #
+          # 3. Проверяем, что пришло в ответе (для логов)
+          cat response.json
+
+          # 4. Извлекаем текст. Пробуем сначала content, если нет - reasoning_content
+          RESULT=$(jq -r '.choices[0].message.content // .choices[0].message.reasoning_content' response.json)
+
+          # 5. Если результат все еще null или пустой, записываем ошибку для диагностики
+          if [ "$RESULT" == "null" ] || [ -z "$RESULT" ]; then
+            echo "Ошибка: API вернул пустой ответ. Проверьте лог выше." > docs/paint-manual-improved.md
+          else
+            echo "$RESULT" > docs/paint-manual-improved.md
+          fi
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "AI: улучшение документации Paint"
+          title: "Предложение от AI-агента"
+          branch: "ai-patch"
+          base: "main"
+          body: "Автоматическое исправление стиля через DeepSeek-R1."
+          add-paths: docs/paint-manual-improved.md
