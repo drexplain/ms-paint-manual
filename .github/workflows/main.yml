@@ -30,8 +30,12 @@ jobs:
 
           # 1. Читаем исходный файл
           file_path = 'docs/paint-manual.md'
-          with open(file_path, 'r', encoding='utf-8') as f:
-              doc_content = f.read()
+          try:
+              with open(file_path, 'r', encoding='utf-8') as f:
+                  doc_content = f.read()
+          except Exception as e:
+              print(f"Ошибка чтения файла: {e}")
+              exit(1)
 
           # 2. Настройки запроса
           url = "https://models.inference.ai.azure.com/chat/completions"
@@ -42,10 +46,9 @@ jobs:
           
           prompt = (
               "Ты — опытный технический редактор. Твоя задача: исправить стиль документации. "
-              "Убери субъективные оценки, используй повелительное наклонение (вместо 'вы можете нажать' пиши 'нажмите'), "
-              "разбей слишком длинные и запутанные предложения на короткие и ясные. "
-              "Обязательно добавь разделы 'Цель', 'Предусловия', 'Возможные ошибки', если их нет. "
-              "Выдай только чистый исправленный текст в формате Markdown без лишних вступлений."
+              "Убери субъективные оценки, используй повелительное наклонение. "
+              "Добавь разделы 'Цель', 'Предусловия', 'Возможные ошибки', если их нет. "
+              "Выдай только чистый исправленный текст в формате Markdown."
           )
 
           payload = {
@@ -58,28 +61,26 @@ jobs:
           }
 
           # 3. Отправляем запрос
-          print("Отправка запроса в DeepSeek...")
+          print("Отправка запроса в GitHub Models (DeepSeek-R1)...")
           response = requests.post(url, headers=headers, json=payload)
           
-          # 4. Обработка результата
+          # 4. Диагностика и обработка результата
           if response.status_code == 200:
-              result = response.json()['choices'][0]['message']['content']
-              # Пишем результат в новый файл
-              with open('docs/paint-manual-improved.md', 'w', encoding='utf-8') as f:
-                  f.write(result)
-              print("Файл успешно обновлен!")
-          else:
-              print(f"Ошибка API: {response.status_code}")
-              print(response.text)
-              exit(1)
-
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "AI: улучшение документации Paint"
-          title: "Предложение от AI-агента"
-          branch: "ai-patch"
-          base: "main"
-          body: "Автоматическое исправление стиля, терминов и структуры через DeepSeek-R1."
-          add-paths: docs/paint-manual-improved.md
+              data = response.json()
+              
+              # Печатаем ответ в логи, чтобы мы могли его изучить, если снова будет null
+              print("ПОЛНЫЙ ОТВЕТ ОТ API:")
+              print(json.dumps(data, indent=2))
+              
+              # Пытаемся достать текст из разных полей (зависит от настроек модели)
+              result = None
+              if 'choices' in data and len(data['choices']) > 0:
+                  choice = data['choices'][0]
+                  if 'message' in choice:
+                      # Сначала ищем в content, затем в reasoning_content (для R1)
+                      result = choice['message'].get('content') or choice['message'].get('reasoning_content')
+              
+              if result is None:
+                  result = f"ВНИМАНИЕ: API вернул пустой ответ (null). Полный ответ был: {json.dumps(data)}"
+              
+              #
