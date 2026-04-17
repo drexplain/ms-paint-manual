@@ -11,24 +11,25 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      models: read               # обязательно для доступа к GitHub Models
+
     steps:
       - uses: actions/checkout@v5
 
       - name: AI Processing
-        id: ai
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Читаем исходный файл
+          # Читаем исходный файл документации
           TEXT=$(cat docs/paint-manual.md)
 
-          # Формируем JSON и отправляем запрос
+          # Отправляем запрос к GitHub Models (бесплатно)
           HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
-            -X POST "https://api.deepseek.com/v1/chat/completions" \
-            -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+            -X POST "https://models.github.ai/inference/chat/completions" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg text "$TEXT" '{
-              model: "deepseek-chat",
+              model: "openai/gpt-4o-mini",
               messages: [{role: "user", content: "Исправь стиль этой документации. Сохрани смысл, но улучши грамматику, структуру и читаемость:\n\($text)"}],
               temperature: 0.7
             }')")
@@ -44,7 +45,7 @@ jobs:
             exit 1
           fi
 
-          # Извлекаем содержимое ответа
+          # Извлекаем результат от модели
           RESULT=$(jq -r '.choices[0].message.content' response.json)
           if [ "$RESULT" = "null" ] || [ -z "$RESULT" ]; then
             echo "Ошибка: пустой ответ от модели" > docs/paint-manual-improved.md
