@@ -11,7 +11,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      models: read               # обязательно для GitHub Models
+      models: read
 
     steps:
       - uses: actions/checkout@v5
@@ -20,35 +20,32 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Читаем исходный файл документации
           TEXT=$(cat docs/paint-manual.md)
+          PROMPT=$(cat .github/prompts/improve-docs.md)
+          FULL_PROMPT="${PROMPT}"$'\n\n'"${TEXT}"
 
-          # Отправляем запрос к GitHub Models (бесплатно)
           HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
             -X POST "https://models.inference.ai.azure.com/chat/completions" \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "$(jq -n --arg text "$TEXT" '{
+            -d "$(jq -n --arg content "$FULL_PROMPT" '{
               model: "gpt-4o-mini",
-              messages: [{role: "user", content: "Исправь стиль этой документации. Сохрани смысл, но улучши грамматику, структуру и читаемость:\n\($text)"}],
-              temperature: 0.7
+              messages: [{role: "user", content: $content}],
+              temperature: 0.3,
+              max_tokens: 4000
             }')")
 
           echo "HTTP статус: $HTTP_STATUS"
-          echo "--- Ответ API ---"
           cat response.json
-          echo "-----------------"
 
           if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Ошибка API. Ответ:" > docs/paint-manual-improved.md
-            cat response.json >> docs/paint-manual-improved.md
+            echo "Ошибка API" > docs/paint-manual-improved.md
             exit 1
           fi
 
-          # Извлекаем результат от модели
           RESULT=$(jq -r '.choices[0].message.content' response.json)
           if [ "$RESULT" = "null" ] || [ -z "$RESULT" ]; then
-            echo "Ошибка: пустой ответ от модели" > docs/paint-manual-improved.md
+            echo "Пустой ответ" > docs/paint-manual-improved.md
             exit 1
           fi
 
