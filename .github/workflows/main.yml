@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: AI Processing
+      - name: AI Processing - generate structured files
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -32,34 +32,52 @@ jobs:
               model: "gpt-4o-mini",
               messages: [{role: "user", content: $content}],
               temperature: 0.3,
-              max_tokens: 4000
+              max_tokens: 8000
             }')")
 
           echo "HTTP статус: $HTTP_STATUS"
           cat response.json
 
           if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Ошибка API" > docs/paint-manual-improved.md
+            echo "Ошибка API" > error.log
             exit 1
           fi
 
-          RESULT=$(jq -r '.choices[0].message.content' response.json)
-          if [ "$RESULT" = "null" ] || [ -z "$RESULT" ]; then
-            echo "Пустой ответ" > docs/paint-manual-improved.md
-            exit 1
-          fi
+          RAW_JSON=$(jq -r '.choices[0].message.content' response.json)
+          CLEAN_JSON=$(echo "$RAW_JSON" | sed -E 's/^```json\s*//; s/```\s*$//')
 
-          echo "$RESULT" > docs/paint-manual-improved.md
+          echo "$CLEAN_JSON" | jq empty || {
+            echo "Невалидный JSON"
+            exit 1
+          }
+
+          # Создаём папки и файлы
+          for row in $(echo "$CLEAN_JSON" | jq -r '.files[] | @base64'); do
+            _jq() {
+              echo "${row}" | base64 --decode | jq -r "${1}"
+            }
+            path=$(_jq '.path')
+            content=$(_jq '.content')
+            mkdir -p "$(dirname "$path")"
+            echo "$content" > "$path"
+            echo "Создан файл: $path"
+          done
+
+          echo "$CLEAN_JSON" | jq -r '.report // ""' > docs/ai_report.txt
+          echo "$CLEAN_JSON" | jq -r '.recommendations // ""' > docs/ai_recommendations.txt
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "AI: улучшение документации"
-          title: "Предложение от AI"
+          commit-message: "AI: реорганизация документации"
+          title: "Предложение от AI: новая структура документации"
           branch: "ai-patch-final"
           base: ${{ github.event.repository.default_branch }}
-          add-paths: docs/paint-manual-improved.md
+          add-paths: |
+            *.md
+            **/*.md
           body: |
-            Это автоматическое предложение по улучшению документации.
-            Проверьте изменения и при необходимости отредактируйте.
+            ИИ-агент создал структурированную документацию.
+            Файлы разложены по папкам.
+            Отчёт и рекомендации в docs/ai_report.txt и docs/ai_recommendations.txt.
