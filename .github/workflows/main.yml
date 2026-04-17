@@ -14,34 +14,64 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Устанавливаем библиотеку для работы с API
+      - name: Install dependencies
+        run: pip install requests
+
       - name: Call DeepSeek via GitHub Models
         id: ai
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: python
         run: |
-          # Читаем исходный файл
-          DOC=$(cat docs/paint-manual.md | jq -Rs .)
+          import os
+          import requests
+          import json
+
+          # 1. Читаем исходный файл
+          file_path = 'docs/paint-manual.md'
+          with open(file_path, 'r', encoding='utf-8') as f:
+              doc_content = f.read()
+
+          # 2. Настройки запроса
+          url = "https://models.inference.ai.azure.com/chat/completions"
+          headers = {
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "Content-Type": "application/json"
+          }
           
-          # Формируем промпт (сокращённая версия для теста)
-          PROMPT="Ты — редактор технической документации. Исправь следующий текст: убери субъективные оценки ('весьма удобно', 'к сожалению'), замени 'вы можете' на прямые команды, разбей длинные предложения. Добавь разделы 'Цель', 'Предусловия', 'Возможные ошибки', если их нет. Выдай только исправленный текст, без пояснений."
-          
-          # Вызываем API GitHub Models
-          RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            https://models.inference.ai.azure.com/chat/completions \
-            -d "{
-              \"model\": \"DeepSeek-R1\",
-              \"messages\": [
-                {\"role\": \"system\", \"content\": \"$PROMPT\"},
-                {\"role\": \"user\", \"content\": $DOC}
+          prompt = (
+              "Ты — опытный технический редактор. Твоя задача: исправить стиль документации. "
+              "Убери субъективные оценки, используй повелительное наклонение (вместо 'вы можете нажать' пиши 'нажмите'), "
+              "разбей слишком длинные и запутанные предложения на короткие и ясные. "
+              "Обязательно добавь разделы 'Цель', 'Предусловия', 'Возможные ошибки', если их нет. "
+              "Выдай только чистый исправленный текст в формате Markdown без лишних вступлений."
+          )
+
+          payload = {
+              "model": "DeepSeek-R1",
+              "messages": [
+                  {"role": "system", "content": prompt},
+                  {"role": "user", "content": doc_content}
               ],
-              \"temperature\": 0.3,
-              \"max_tokens\": 4000
-            }")
+              "temperature": 0.3
+          }
+
+          # 3. Отправляем запрос
+          print("Отправка запроса в DeepSeek...")
+          response = requests.post(url, headers=headers, json=payload)
           
-          # Извлекаем ответ
-          echo "$RESPONSE" | jq -r '.choices[0].message.content' > docs/paint-manual-improved.md
+          # 4. Обработка результата
+          if response.status_code == 200:
+              result = response.json()['choices'][0]['message']['content']
+              # Пишем результат в новый файл
+              with open('docs/paint-manual-improved.md', 'w', encoding='utf-8') as f:
+                  f.write(result)
+              print("Файл успешно обновлен!")
+          else:
+              print(f"Ошибка API: {response.status_code}")
+              print(response.text)
+              exit(1)
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
@@ -51,5 +81,5 @@ jobs:
           title: "Предложение от AI-агента"
           branch: "ai-patch"
           base: "main"
-          body: "Автоматическое исправление стиля, терминов и структуры."
+          body: "Автоматическое исправление стиля, терминов и структуры через DeepSeek-R1."
           add-paths: docs/paint-manual-improved.md
