@@ -17,37 +17,41 @@ jobs:
       - name: AI Processing
         id: ai
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          # 1. Читаем и проверяем исходник
-          TEXT_CONTENT=$(cat docs/paint-manual.md | jq -aRs .)
-          echo "Файл прочитан успешно."
+          # Читаем исходный файл
+          TEXT=$(cat docs/paint-manual.md)
 
-          # 2. Запрос к модели DeepSeek-V3 (она быстрее и стабильнее для тестов)
-          echo "Отправка запроса в API..."
-          curl -s -X POST "https://models.inference.ai.azure.com/chat/completions" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
+          # Формируем JSON и отправляем запрос
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            -X POST "https://api.deepseek.com/v1/chat/completions" \
+            -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"DeepSeek-V3\",
-              \"messages\": [
-                {\"role\": \"user\", \"content\": \"Исправь стиль этой документации: $TEXT_CONTENT\"}
-              ]
-            }" > response.json
+            -d "$(jq -n --arg text "$TEXT" '{
+              model: "deepseek-chat",
+              messages: [{role: "user", content: "Исправь стиль этой документации. Сохрани смысл, но улучши грамматику, структуру и читаемость:\n\($text)"}],
+              temperature: 0.7
+            }')")
 
-          # 3. ПЕЧАТАЕМ ОТВЕТ В ЛОГИ (это решит нашу загадку)
-          echo "--- ОТВЕТ СЕРВЕРА НАЧАЛО ---"
+          echo "HTTP статус: $HTTP_STATUS"
+          echo "--- Ответ API ---"
           cat response.json
-          echo -e "\n--- ОТВЕТ СЕРВЕРА КОНЕЦ ---"
+          echo "-----------------"
 
-          # 4. Извлекаем текст
-          RESULT=$(jq -r '.choices[0].message.content' response.json)
-
-          if [ "$RESULT" == "null" ] || [ -z "$RESULT" ]; then
-            echo "Ошибка: API вернул пустой результат. См. лог выше." > docs/paint-manual-improved.md
-          else
-            echo "$RESULT" > docs/paint-manual-improved.md
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Ошибка API. Ответ:" > docs/paint-manual-improved.md
+            cat response.json >> docs/paint-manual-improved.md
+            exit 1
           fi
+
+          # Извлекаем содержимое ответа
+          RESULT=$(jq -r '.choices[0].message.content' response.json)
+          if [ "$RESULT" = "null" ] || [ -z "$RESULT" ]; then
+            echo "Ошибка: пустой ответ от модели" > docs/paint-manual-improved.md
+            exit 1
+          fi
+
+          echo "$RESULT" > docs/paint-manual-improved.md
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
@@ -56,5 +60,8 @@ jobs:
           commit-message: "AI: улучшение документации"
           title: "Предложение от AI"
           branch: "ai-patch-final"
-          base: "main"
+          base: ${{ github.event.repository.default_branch }}
           add-paths: docs/paint-manual-improved.md
+          body: |
+            Это автоматическое предложение по улучшению документации.
+            Проверьте изменения и при необходимости отредактируйте.
